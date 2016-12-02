@@ -1,0 +1,42 @@
+- name: check backup directory is defind
+  shell: "ls {{ remote_backup_directory }}/`ls -l {{ remote_backup_directory }}| grep ^d | awk '{ print $NF}' | sort -t '-' -nr -k4 -k5 | head -n1`"
+  register: check_result
+
+- name: shutdown tomcat
+  shell: source {{ user_env }} && nohup {{ remote_tomcat_shell_directory }}/shutdown.sh
+  sudo_user: "{{ remote_sudo_user }}"
+  ignore_errors: yes
+  when: check_result.stdout != ""
+- wait_for: host={{ remote_host }} port={{ remote_host_port }} state=stopped delay=10 timeout=60
+  ignore_errors: yes
+
+- name: check_tomcat_status_sec
+  shell: "pgrep -f {{ remote_tomcat_process_name }}"
+  sudo_user: "{{ remote_sudo_user }}"
+  ignore_errors: yes
+  register: shutdown_result
+
+- name: force shutdown
+  shell: pgrep -f {{ remote_tomcat_process_name }} | xargs kill -9
+  sudo_user: "{{ remote_sudo_user }}"
+  ignore_errors: yes
+  when: shutdown_result.stdout != ""
+  
+- name: Delete application generated folders
+  file: path={{ remote_warball_path }}/{{ item | basename |regex_replace('\.\w+','') }} state=absent force=yes
+  with_items: "{{ check_result.stdout_lines }}"
+  ignore_errors: yes
+  when: check_result.stdout != "" and shutdown_result.stdout == ""
+
+- name: roll back files
+  shell: cp "{{ remote_backup_directory }}"/`ls -l {{ remote_backup_directory }}| grep ^d | awk '{ print $NF}' | sort -t '-' -nr -k4 -k5 | head -n1`/{{ item }} {{ remote_warball_path }}
+  with_items: "{{ check_result.stdout_lines }}"
+  sudo_user: "{{ remote_sudo_user }}"
+  ignore_errors: yes
+  when: check_result.stdout != "" and shutdown_result.stdout == ""
+
+- name: startup tomcat
+  shell: source {{ user_env }} && nohup {{ remote_tomcat_shell_directory }}/startup.sh
+  sudo_user: "{{ remote_sudo_user }}"
+  when: shutdown_result.stdout == ""
+- wait_for: host={{ remote_host }} port={{ remote_host_port }} delay=10
